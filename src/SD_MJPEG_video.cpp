@@ -25,6 +25,7 @@
 #define TFT_HEIGHT 240
 #define TFT_COL_OFFSET 0
 #define TFT_ROW_OFFSET 0
+#define BUTTON_STARTUP_IGNORE_MS 1500
 
 void setup();
 void loop();
@@ -53,6 +54,7 @@ static size_t currentFileIndex = 0;
 static bool sdReady = false;
 static bool nextFileRequested = false;
 static int32_t lastDrawnFileIndex = -1;
+static uint32_t bootMs = 0;
 
 static bool hasPlayableExtension(const String &path)
 {
@@ -150,6 +152,15 @@ static void pollNextFileButton()
   static uint8_t stableState = HIGH;
   static uint32_t lastChangeMs = 0;
 
+  if (millis() - bootMs < BUTTON_STARTUP_IGNORE_MS)
+  {
+    lastReading = digitalRead(NEXT_FILE_PIN);
+    stableState = lastReading;
+    lastChangeMs = millis();
+    nextFileRequested = false;
+    return;
+  }
+
   uint8_t reading = digitalRead(NEXT_FILE_PIN);
   if (reading != lastReading)
   {
@@ -159,8 +170,9 @@ static void pollNextFileButton()
 
   if ((millis() - lastChangeMs) >= BUTTON_DEBOUNCE_MS && reading != stableState)
   {
+    uint8_t previousStableState = stableState;
     stableState = reading;
-    if (stableState == LOW)
+    if (previousStableState == LOW && stableState == HIGH)
     {
       nextFileRequested = true;
     }
@@ -238,6 +250,7 @@ static void playCurrentFile()
 
 void setup()
 {
+  bootMs = millis();
   WiFi.mode(WIFI_OFF);
   Serial.begin(115200);
   pinMode(NEXT_FILE_PIN, INPUT_PULLUP);
