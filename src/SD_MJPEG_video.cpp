@@ -8,9 +8,10 @@
 #include <FS.h>
 #include <SD.h>
 #include <SD_MMC.h>
+#include <Preferences.h>
 #include <Arduino_GFX_Library.h>
 
-#define TFT_BRIGHTNESS 200
+#define TFT_BRIGHTNESS 205
 #define NEXT_FILE_PIN 23
 #define BUTTON_DEBOUNCE_MS 40
 #define MISO 2
@@ -26,6 +27,8 @@
 #define TFT_COL_OFFSET 0
 #define TFT_ROW_OFFSET 0
 #define BUTTON_STARTUP_IGNORE_MS 1500
+#define PREF_NAMESPACE "player"
+#define PREF_FILE_INDEX_KEY "file_index"
 
 void setup();
 void loop();
@@ -47,6 +50,7 @@ Arduino_ST7789 *gfx = new Arduino_ST7789(
 
 #include "MjpegClass.h"
 static MjpegClass mjpeg;
+static Preferences preferences;
 
 static std::vector<String> playlistFiles;
 static uint8_t *mjpeg_buf = nullptr;
@@ -55,6 +59,28 @@ static bool sdReady = false;
 static bool nextFileRequested = false;
 static int32_t lastDrawnFileIndex = -1;
 static uint32_t bootMs = 0;
+
+static void persistCurrentFileIndex()
+{
+  preferences.putUInt(PREF_FILE_INDEX_KEY, static_cast<uint32_t>(currentFileIndex));
+}
+
+static void setCurrentFileIndex(size_t index, bool persist)
+{
+  if (playlistFiles.empty())
+  {
+    currentFileIndex = 0;
+    return;
+  }
+
+  currentFileIndex = index % playlistFiles.size();
+  lastDrawnFileIndex = -1;
+
+  if (persist)
+  {
+    persistCurrentFileIndex();
+  }
+}
 
 static bool hasPlayableExtension(const String &path)
 {
@@ -134,7 +160,16 @@ static void requestNextFile()
 {
   if (!playlistFiles.empty())
   {
-    currentFileIndex = (currentFileIndex + 1) % playlistFiles.size();
+    setCurrentFileIndex(currentFileIndex + 1, false);
+    nextFileRequested = false;
+  }
+}
+
+static void requestNextFileFromButton()
+{
+  if (!playlistFiles.empty())
+  {
+    setCurrentFileIndex(currentFileIndex + 1, true);
     nextFileRequested = false;
   }
 }
@@ -216,7 +251,7 @@ static void playCurrentFile()
     if (consumeNextFileRequest())
     {
       vFile.close();
-      requestNextFile();
+      requestNextFileFromButton();
       return;
     }
 
@@ -244,7 +279,7 @@ static void playCurrentFile()
 
   if (consumeNextFileRequest())
   {
-    requestNextFile();
+    requestNextFileFromButton();
   }
 }
 
@@ -254,13 +289,14 @@ void setup()
   WiFi.mode(WIFI_OFF);
   Serial.begin(115200);
   pinMode(NEXT_FILE_PIN, INPUT_PULLUP);
+  preferences.begin(PREF_NAMESPACE, false);
 
   gfx->begin();
   gfx->fillScreen(BLACK);
 
 #ifdef TFT_BL
-  ledcAttachPin(TFT_BL, 1);     // assign TFT_BL pin to channel 1
   ledcSetup(1, 12000, 8);       // 12 kHz PWM, 8-bit resolution
+  ledcAttachPin(TFT_BL, 1);     // assign TFT_BL pin to channel 1
   ledcWrite(1, TFT_BRIGHTNESS); // brightness 0 - 255
 #endif
 
@@ -284,9 +320,21 @@ void setup()
     return;
   }
 
+  uint32_t storedFileIndex = preferences.getUInt(PREF_FILE_INDEX_KEY, 0);
+  if (storedFileIndex < playlistFiles.size())
+  {
+    setCurrentFileIndex(storedFileIndex, false);
+    Serial.printf("Restored file index: %u\r\n", static_cast<unsigned>(storedFileIndex));
+  }
+  else
+  {
+    setCurrentFileIndex(0, true);
+    Serial.printf("Stored file index %u invalid, fallback to 0\r\n", static_cast<unsigned>(storedFileIndex));
+  }
+
   sdReady = true;
   Serial.printf("Found %u files\r\n", static_cast<unsigned>(playlistFiles.size()));
-  Serial.print(F("First file: "));
+  Serial.print(F("Start file: "));
   Serial.println(playlistFiles[currentFileIndex]);
 }
 
